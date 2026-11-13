@@ -1,0 +1,883 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Remote Web Control — คุมเครื่องจากคอม (มือถือยังขยับได้)</title>
+  <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+Thai:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    body {
+      font-family: 'Noto Sans Thai', 'Inter', system-ui, -apple-system, sans-serif;
+      overscroll-behavior-y: contain;
+    }
+    .remote-cursor {
+      position: fixed;
+      pointer-events: none;
+      z-index: 9999;
+      transform: translate(-4px, -4px);
+      transition: left 0.04s linear, top 0.04s linear, opacity 0.2s ease;
+    }
+    .click-ripple {
+      position: fixed;
+      width: 36px;
+      height: 36px;
+      margin-left: -18px;
+      margin-top: -18px;
+      border-radius: 9999px;
+      border: 3px solid #38bdf8;
+      background: rgba(56, 189, 248, 0.25);
+      pointer-events: none;
+      z-index: 9998;
+      animation: rippleOut 0.55s ease-out forwards;
+    }
+    @keyframes rippleOut {
+      0% { transform: scale(0.3); opacity: 1; }
+      100% { transform: scale(1.9); opacity: 0; }
+    }
+    .draggable-card {
+      touch-action: none;
+      user-select: none;
+      cursor: grab;
+    }
+    .draggable-card:active {
+      cursor: grabbing;
+    }
+    #drawCanvas {
+      touch-action: none;
+    }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col">
+
+  <!-- Toast Container -->
+  <div id="toastContainer" class="fixed top-4 right-4 z-[10000] flex flex-col gap-2 max-w-xs w-full pointer-events-none"></div>
+
+  <!-- Remote Cursor Overlay (Shown on Phone when controlled) -->
+  <div id="remoteCursor" class="remote-cursor hidden">
+    <div class="relative">
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="none">
+        <path d="M4 3L19 11L12.5 13.5L10 20L4 3Z" fill="#38bdf8" stroke="#0f172a" stroke-width="1.8" stroke-linejoin="round"/>
+      </svg>
+      <span class="absolute left-6 top-3 bg-sky-500 text-slate-950 text-[11px] font-bold px-2 py-0.5 rounded-full shadow whitespace-nowrap">
+        คอมกำลังคุม
+      </span>
+    </div>
+  </div>
+
+  <!-- Top Header -->
+  <header class="border-b border-slate-800/80 bg-slate-900/70 backdrop-blur sticky top-0 z-40">
+    <div class="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between gap-3">
+      <div class="flex items-center gap-2.5">
+        <div class="w-9 h-9 rounded-xl bg-sky-500/15 border border-sky-500/30 flex items-center justify-center text-sky-400">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
+          </svg>
+        </div>
+        <div>
+          <h1 class="text-sm sm:text-base font-bold text-white leading-tight">Remote Web Control</h1>
+          <p class="text-xs text-slate-400">คุมหน้าจอเว็บจากคอม • มือถือยังขยับได้อิสระ</p>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-2">
+        <span id="statusBadge" class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-slate-800 text-slate-300 border border-slate-700">
+          <span id="statusDot" class="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>
+          <span id="statusText">กำลังเตรียมรหัส...</span>
+        </span>
+        <button id="headerExitBtn" type="button" class="hidden px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 active:scale-95 text-white text-xs font-semibold transition cursor-pointer">
+          กดออก
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Content -->
+  <main class="flex-1 max-w-5xl w-full mx-auto px-4 py-6">
+
+    <!-- VIEW 1: LOBBY (Code Display + Phone Connect Input) -->
+    <section id="lobbyView" class="grid grid-cols-1 md:grid-cols-2 gap-6 items-stretch">
+      <!-- Card A: My Code (For Computer) -->
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 flex flex-col justify-between shadow-xl">
+        <div>
+          <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-sky-500/10 border border-sky-500/25 text-sky-400 text-xs font-semibold mb-4">
+            <span>💻 สำหรับคอมพิวเตอร์ (เครื่องควบคุม)</span>
+          </div>
+          <h2 class="text-xl font-bold text-white mb-1">รหัสของเรา</h2>
+          <p class="text-sm text-slate-400 mb-6">นำรหัส 6 หลักนี้ไปใส่ในโทรศัพท์เพื่อเริ่มให้คอมพิวเตอร์เข้าควบคุม</p>
+
+          <div class="bg-slate-950 border border-slate-800 rounded-2xl p-5 text-center mb-4">
+            <div class="text-xs uppercase tracking-wider text-slate-500 mb-1.5">รหัสเชื่อมต่อของคุณ</div>
+            <div id="myCodeDisplay" class="text-4xl sm:text-5xl font-extrabold tracking-[0.2em] text-sky-400 select-all font-mono">
+              ------
+            </div>
+          </div>
+
+          <div class="flex gap-2.5">
+            <button id="copyCodeBtn" type="button" class="flex-1 py-2.5 px-4 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-semibold text-sm transition active:scale-95 cursor-pointer">
+              คัดลอกรหัส
+            </button>
+            <button id="regenCodeBtn" type="button" class="py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium text-sm border border-slate-700 transition active:scale-95 cursor-pointer">
+              สุ่มรหัสใหม่
+            </button>
+          </div>
+        </div>
+
+        <div class="mt-6 pt-4 border-t border-slate-800/80 flex items-center justify-between text-xs text-slate-400">
+          <span id="hostReadyNote">กำลังรอโทรศัพท์ใส่รหัส...</span>
+          <span class="text-slate-500">WebRTC P2P</span>
+        </div>
+      </div>
+
+      <!-- Card B: Enter Code (For Phone) -->
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 flex flex-col justify-between shadow-xl">
+        <div>
+          <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/25 text-emerald-400 text-xs font-semibold mb-4">
+            <span>📱 สำหรับโทรศัพท์ (เครื่องที่ถูกคุม)</span>
+          </div>
+          <h2 class="text-xl font-bold text-white mb-1">ใส่รหัสจากคอมพิวเตอร์</h2>
+          <p class="text-sm text-slate-400 mb-6">กรอกรหัส 6 หลักที่แสดงบนหน้าจอคอมพิวเตอร์ เพื่อเชื่อมต่อและให้คอมคุมหน้านี้ (คุณยังขยับและใช้งานหน้าจอได้ปกติ)</p>
+
+          <form id="connectForm" class="space-y-4">
+            <div>
+              <label for="targetCodeInput" class="block text-xs font-medium text-slate-400 mb-1.5">รหัส 6 หลัก</label>
+              <input
+                id="targetCodeInput"
+                type="text"
+                inputmode="numeric"
+                maxlength="6"
+                placeholder="เช่น 482915"
+                class="w-full bg-slate-950 border border-slate-700 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 rounded-xl px-4 py-3.5 text-center text-2xl font-bold tracking-[0.25em] text-white placeholder:text-slate-600 placeholder:text-base placeholder:tracking-normal outline-none transition font-mono"
+              />
+            </div>
+
+            <button id="connectBtn" type="submit" class="w-full py-3 px-4 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-sm transition active:scale-95 cursor-pointer">
+              เชื่อมต่อให้คอมคุมเครื่อง
+            </button>
+          </form>
+        </div>
+
+        <div class="mt-6 pt-4 border-t border-slate-800/80 text-xs text-slate-400 space-y-1">
+          <p>💡 <strong class="text-slate-300">หมายเหตุ:</strong> ควบคุมได้เฉพาะหน้าเว็บนี้เท่านั้น (เบราว์เซอร์ไม่อนุญาตให้เว็บควบคุมแอปอื่นหรือหน้าโฮมของมือถือ)</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- VIEW 2: COMPUTER CONTROLLER VIEW -->
+    <section id="controllerView" class="hidden space-y-5">
+      <div class="bg-sky-500/10 border border-sky-500/30 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3">
+        <div class="flex items-center gap-3">
+          <span class="w-3 h-3 rounded-full bg-emerald-400 animate-pulse"></span>
+          <div>
+            <div class="text-sm font-bold text-white">กำลังคุมเครื่องโทรศัพท์ (รหัส: <span id="ctrlSessionCode" class="font-mono text-sky-400"></span>)</div>
+            <div class="text-xs text-slate-300">เลื่อนเมาส์บนทัชแพดเพื่อขยับเคอร์เซอร์บนมือถือ • มือถือยังสามารถขยับหน้าจอตัวเองได้พร้อมกัน</div>
+          </div>
+        </div>
+        <button id="ctrlExitBtn" type="button" class="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-sm shadow transition active:scale-95 cursor-pointer">
+          กดออกจากโหมดคุมเครื่อง
+        </button>
+      </div>
+
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-5">
+        <!-- Remote Touchpad -->
+        <div class="lg:col-span-2 bg-slate-900 border border-slate-800 rounded-2xl p-4 flex flex-col">
+          <div class="flex items-center justify-between mb-3">
+            <span class="text-sm font-semibold text-white">ทัชแพดควบคุมหน้าจอมือถือ (เลื่อน / คลิก / สกรอลล์)</span>
+            <span id="cursorCoordLabel" class="text-xs font-mono text-slate-400">X: 50% Y: 50%</span>
+          </div>
+
+          <div id="touchpadArea" class="relative flex-1 min-h-[320px] sm:min-h-[380px] bg-slate-950 border-2 border-dashed border-slate-700 hover:border-sky-500/60 rounded-xl overflow-hidden cursor-crosshair select-none flex items-center justify-center">
+            <div class="text-center pointer-events-none px-4">
+              <div class="text-slate-500 text-sm font-medium mb-1">ขยับเมาส์หรือลากนิ้วที่นี่เพื่อเลื่อนเคอร์เซอร์บนมือถือ</div>
+              <div class="text-slate-600 text-xs">คลิกซ้าย = แตะหน้าจอมือถือ ณ ตำแหน่งนั้น • ใช้ล้อเมาส์ = เลื่อนขึ้น/ลงบนมือถือ</div>
+            </div>
+            <!-- Mirror dot on touchpad -->
+            <div id="touchpadDot" class="hidden absolute w-4 h-4 -ml-2 -mt-2 rounded-full bg-sky-400 ring-4 ring-sky-400/30 pointer-events-none"></div>
+          </div>
+
+          <div class="grid grid-cols-3 gap-2.5 mt-3">
+            <button id="cmdScrollUp" type="button" class="py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200 border border-slate-700 transition active:scale-95 cursor-pointer">
+              ▲ เลื่อนขึ้น
+            </button>
+            <button id="cmdCenterClick" type="button" class="py-2 px-3 rounded-xl bg-sky-500/20 hover:bg-sky-500/30 text-xs font-semibold text-sky-300 border border-sky-500/40 transition active:scale-95 cursor-pointer">
+              ● แตะกลางจอ
+            </button>
+            <button id="cmdScrollDown" type="button" class="py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200 border border-slate-700 transition active:scale-95 cursor-pointer">
+              ▼ เลื่อนลง
+            </button>
+          </div>
+        </div>
+
+        <!-- Remote Commands & Live Activity -->
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex flex-col justify-between gap-4">
+          <div class="space-y-4">
+            <h3 class="text-sm font-bold text-white">คำสั่งด่วนไปยังมือถือ</h3>
+
+            <form id="sendTextForm" class="space-y-2">
+              <label for="remoteTextInput" class="block text-xs text-slate-400">ส่งข้อความไปที่หน้าจอมือถือ</label>
+              <div class="flex gap-2">
+                <input id="remoteTextInput" type="text" placeholder="พิมพ์ข้อความ..." class="flex-1 bg-slate-950 border border-slate-700 focus:border-sky-500 rounded-xl px-3 py-2 text-sm text-white outline-none" />
+                <button type="submit" class="px-3.5 py-2 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold text-xs transition active:scale-95 cursor-pointer">
+                  ส่ง
+                </button>
+              </div>
+            </form>
+
+            <div class="grid grid-cols-2 gap-2">
+              <button id="cmdPingPhone" type="button" class="py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200 border border-slate-700 transition active:scale-95 cursor-pointer">
+                🔔 แจ้งเตือน / สั่น
+              </button>
+              <button id="cmdToggleTheme" type="button" class="py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200 border border-slate-700 transition active:scale-95 cursor-pointer">
+                🎨 สลับสีการ์ดมือถือ
+              </button>
+              <button id="cmdResetCards" type="button" class="py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200 border border-slate-700 transition active:scale-95 cursor-pointer">
+                🔄 รีเซ็ตการ์ดมือถือ
+              </button>
+              <button id="cmdClearCanvas" type="button" class="py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200 border border-slate-700 transition active:scale-95 cursor-pointer">
+                🧹 ล้างกระดานวาด
+              </button>
+            </div>
+          </div>
+
+          <div class="border-t border-slate-800 pt-3">
+            <div class="text-xs font-semibold text-slate-400 mb-2">สถานะการเคลื่อนไหวล่าสุด</div>
+            <div id="ctrlLog" class="bg-slate-950 border border-slate-800 rounded-xl p-2.5 h-36 overflow-y-auto text-xs space-y-1.5 font-mono text-slate-300">
+              <div class="text-slate-500">รอรับสัญญาณจากมือถือ...</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- VIEW 3: PHONE CONTROLLED VIEW (Non-blocking: PC controls + Phone still moves!) -->
+    <section id="controlledView" class="hidden space-y-5">
+      <!-- Non-blocking Banner -->
+      <div class="bg-emerald-500/10 border border-emerald-500/30 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3">
+        <div class="flex items-center gap-3">
+          <span class="w-3 h-3 rounded-full bg-emerald-400 animate-ping"></span>
+          <div>
+            <div class="text-sm font-bold text-white">กำลังถูกคุมจากคอมพิวเตอร์ (รหัส: <span id="phoneSessionCode" class="font-mono text-emerald-400"></span>)</div>
+            <div class="text-xs text-emerald-200/80">หน้าจอไม่ถูกล็อก — คุณยังสามารถเลื่อน กดปุ่ม ลากการ์ด และวาดบนมือถือได้ตามปกติ</div>
+          </div>
+        </div>
+        <button id="phoneExitBtn" type="button" class="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-sm transition active:scale-95 cursor-pointer">
+          กดออก / ตัดการเชื่อมต่อ
+        </button>
+      </div>
+
+      <!-- Incoming Message Box -->
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-xs font-semibold text-slate-400">ข้อความ/คำสั่งจากคอมพิวเตอร์</span>
+          <span id="phoneMoveIndicator" class="text-xs px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+            มือถือ: ขยับได้อิสระ
+          </span>
+        </div>
+        <div id="phoneReceivedText" class="bg-slate-950 border border-slate-800 rounded-xl p-3 text-sm text-sky-300 min-h-[44px] flex items-center">
+          ยังไม่มีข้อความจากคอมพิวเตอร์...
+        </div>
+      </div>
+
+      <!-- Interactive Workspace (Both PC Cursor & Phone Touch can move items simultaneously) -->
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+        <!-- Movable Cards Area -->
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h3 class="text-sm font-bold text-white">พื้นที่ทดลองขยับ (ลากด้วยนิ้วบนมือถือได้)</h3>
+            <span class="text-xs text-slate-400">คลิกจากคอมก็กดปุ่มได้</span>
+          </div>
+          <div id="playgroundBox" class="relative h-64 bg-slate-950 border border-slate-800 rounded-xl overflow-hidden">
+            <div id="card1" data-card="1" class="draggable-card absolute left-4 top-4 w-32 p-3 rounded-xl bg-sky-600/25 border border-sky-500/50 text-xs font-semibold text-sky-200 shadow-lg">
+              📦 การ์ด 1<br/><span class="text-[10px] text-sky-300/80 font-normal">ลากขยับได้เลย</span>
+            </div>
+            <div id="card2" data-card="2" class="draggable-card absolute right-4 top-12 w-32 p-3 rounded-xl bg-emerald-600/25 border border-emerald-500/50 text-xs font-semibold text-emerald-200 shadow-lg">
+              📱 การ์ด 2<br/><span class="text-[10px] text-emerald-300/80 font-normal">ขยับได้แม้โดนคุม</span>
+            </div>
+            <button id="phoneTapTestBtn" type="button" class="absolute left-1/2 bottom-4 -translate-x-1/2 px-4 py-2 rounded-xl bg-indigo-500 hover:bg-indigo-400 text-white text-xs font-bold shadow transition active:scale-95 cursor-pointer">
+              ปุ่มทดสอบ (กดได้ทั้งคอมและมือถือ) • <span id="tapCount">0</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Shared Drawing Canvas -->
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h3 class="text-sm font-bold text-white">กระดานวาดอิสระ</h3>
+            <button id="phoneClearLocalBtn" type="button" class="text-xs px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 cursor-pointer">
+              ล้างกระดาน
+            </button>
+          </div>
+          <canvas id="drawCanvas" class="w-full h-64 bg-slate-950 border border-slate-800 rounded-xl block"></canvas>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <script>
+    (function () {
+      const PEER_PREFIX = 'rc-web-th-2026-';
+      let myCode = '';
+      let peer = null;
+      let conn = null;
+      let bc = null;
+      let role = 'lobby'; // 'lobby' | 'controller' | 'controlled'
+      let tapCounter = 0;
+      let cardAltTheme = false;
+
+      // DOM Elements
+      const lobbyView = document.getElementById('lobbyView');
+      const controllerView = document.getElementById('controllerView');
+      const controlledView = document.getElementById('controlledView');
+      const myCodeDisplay = document.getElementById('myCodeDisplay');
+      const copyCodeBtn = document.getElementById('copyCodeBtn');
+      const regenCodeBtn = document.getElementById('regenCodeBtn');
+      const hostReadyNote = document.getElementById('hostReadyNote');
+      const connectForm = document.getElementById('connectForm');
+      const targetCodeInput = document.getElementById('targetCodeInput');
+      const connectBtn = document.getElementById('connectBtn');
+      const statusDot = document.getElementById('statusDot');
+      const statusText = document.getElementById('statusText');
+      const headerExitBtn = document.getElementById('headerExitBtn');
+      const ctrlExitBtn = document.getElementById('ctrlExitBtn');
+      const phoneExitBtn = document.getElementById('phoneExitBtn');
+      const ctrlSessionCode = document.getElementById('ctrlSessionCode');
+      const phoneSessionCode = document.getElementById('phoneSessionCode');
+      const touchpadArea = document.getElementById('touchpadArea');
+      const touchpadDot = document.getElementById('touchpadDot');
+      const cursorCoordLabel = document.getElementById('cursorCoordLabel');
+      const remoteCursor = document.getElementById('remoteCursor');
+      const ctrlLog = document.getElementById('ctrlLog');
+      const sendTextForm = document.getElementById('sendTextForm');
+      const remoteTextInput = document.getElementById('remoteTextInput');
+      const phoneReceivedText = document.getElementById('phoneReceivedText');
+      const phoneTapTestBtn = document.getElementById('phoneTapTestBtn');
+      const tapCountEl = document.getElementById('tapCount');
+      const drawCanvas = document.getElementById('drawCanvas');
+      const toastContainer = document.getElementById('toastContainer');
+
+      function showToast(msg, type = 'info') {
+        const colors = {
+          info: 'bg-slate-800 border-slate-700 text-slate-100',
+          success: 'bg-emerald-950/90 border-emerald-500/50 text-emerald-200',
+          warn: 'bg-amber-950/90 border-amber-500/50 text-amber-200',
+          error: 'bg-rose-950/90 border-rose-500/50 text-rose-200'
+        };
+        const el = document.createElement('div');
+        el.className = `pointer-events-auto px-4 py-2.5 rounded-xl border shadow-lg text-xs font-medium transition-all duration-300 ${colors[type] || colors.info}`;
+        el.textContent = msg;
+        toastContainer.appendChild(el);
+        setTimeout(() => {
+          el.style.opacity = '0';
+          setTimeout(() => el.remove(), 300);
+        }, 2800);
+      }
+
+      function appendCtrlLog(msg) {
+        if (!ctrlLog) return;
+        const placeholder = ctrlLog.querySelector('.text-slate-500');
+        if (placeholder) placeholder.remove();
+        const row = document.createElement('div');
+        const t = new Date().toLocaleTimeString('th-TH', { hour12: false });
+        row.textContent = `[${t}] ${msg}`;
+        ctrlLog.prepend(row);
+        while (ctrlLog.children.length > 30) {
+          ctrlLog.lastElementChild.remove();
+        }
+      }
+
+      function setStatus(state, text) {
+        statusText.textContent = text;
+        statusDot.className = 'w-2 h-2 rounded-full';
+        if (state === 'ready') statusDot.classList.add('bg-sky-400');
+        else if (state === 'connected') statusDot.classList.add('bg-emerald-400', 'animate-pulse');
+        else if (state === 'error') statusDot.classList.add('bg-rose-500');
+        else statusDot.classList.add('bg-amber-400', 'animate-pulse');
+      }
+
+      function switchView(newRole) {
+        role = newRole;
+        lobbyView.classList.toggle('hidden', newRole !== 'lobby');
+        controllerView.classList.toggle('hidden', newRole !== 'controller');
+        controlledView.classList.toggle('hidden', newRole !== 'controlled');
+        headerExitBtn.classList.toggle('hidden', newRole === 'lobby');
+        if (newRole !== 'controlled') {
+          remoteCursor.classList.add('hidden');
+        } else {
+          resizeCanvas();
+        }
+      }
+
+      function generateCode() {
+        return String(Math.floor(100000 + Math.random() * 900000));
+      }
+
+      function sendPayload(payload) {
+        if (conn && conn.open) {
+          conn.send(payload);
+        }
+        if (bc) {
+          bc.postMessage({ from: myCode, ...payload });
+        }
+      }
+
+      function initHostPeer() {
+        if (peer) {
+          try { peer.destroy(); } catch (e) {}
+          peer = null;
+        }
+        if (bc) {
+          try { bc.close(); } catch (e) {}
+          bc = null;
+        }
+
+        myCode = generateCode();
+        myCodeDisplay.textContent = myCode;
+        setStatus('waiting', 'กำลังสร้างรหัส...');
+        hostReadyNote.textContent = 'กำลังเชื่อมต่อเซิร์ฟเวอร์จับคู่...';
+
+        // Same-browser BroadcastChannel fallback
+        if (typeof BroadcastChannel !== 'undefined') {
+          bc = new BroadcastChannel(PEER_PREFIX + myCode);
+          bc.onmessage = (ev) => {
+            const data = ev.data;
+            if (!data || data.from === myCode) return;
+            if (data.type === 'local-join' && role === 'lobby') {
+              ctrlSessionCode.textContent = myCode;
+              switchView('controller');
+              setStatus('connected', 'กำลังคุมเครื่อง (แท็บเดียวกัน)');
+              showToast('เชื่อมต่อโทรศัพท์แล้ว! เริ่มคุมได้ทันที', 'success');
+              bc.postMessage({ from: myCode, type: 'local-ack' });
+            } else {
+              handleIncomingData(data);
+            }
+          };
+        }
+
+        if (typeof Peer === 'undefined') {
+          setStatus('ready', 'พร้อมใช้งาน (โหมดในเบราว์เซอร์)');
+          hostReadyNote.textContent = 'พร้อมรับการเชื่อมต่อจากแท็บอื่นในเบราว์เซอร์นี้';
+          return;
+        }
+
+        peer = new Peer(PEER_PREFIX + myCode);
+
+        peer.on('open', () => {
+          setStatus('ready', 'พร้อมเชื่อมต่อ');
+          hostReadyNote.textContent = 'พร้อมแล้ว! นำรหัสไปใส่ในโทรศัพท์ได้เลย';
+        });
+
+        peer.on('connection', (incomingConn) => {
+          if (conn && conn.open) {
+            incomingConn.close();
+            return;
+          }
+          conn = incomingConn;
+          setupConnectionEvents(conn, 'controller', myCode);
+        });
+
+        peer.on('error', (err) => {
+          if (err && err.type === 'unavailable-id') {
+            initHostPeer();
+          } else {
+            setStatus('error', 'เชื่อมต่อไม่สำเร็จ');
+            hostReadyNote.textContent = 'ลองกดสุ่มรหัสใหม่อีกครั้ง';
+          }
+        });
+      }
+
+      function setupConnectionEvents(activeConn, targetRole, sessionCode) {
+        activeConn.on('open', () => {
+          if (targetRole === 'controller') {
+            ctrlSessionCode.textContent = sessionCode;
+            switchView('controller');
+            setStatus('connected', 'กำลังคุมเครื่องโทรศัพท์');
+            showToast('โทรศัพท์เชื่อมต่อเข้ามาแล้ว!', 'success');
+            appendCtrlLog('โทรศัพท์เชื่อมต่อสำเร็จ');
+          } else {
+            phoneSessionCode.textContent = sessionCode;
+            switchView('controlled');
+            setStatus('connected', 'ถูกคุมจากคอม (ขยับได้ปกติ)');
+            showToast('เชื่อมต่อคอมพิวเตอร์แล้ว คุณยังขยับหน้าจอได้ปกติ', 'success');
+          }
+        });
+
+        activeConn.on('data', (data) => {
+          handleIncomingData(data);
+        });
+
+        activeConn.on('close', () => {
+          handleDisconnectCleanup(false);
+        });
+
+        activeConn.on('error', () => {
+          showToast('การเชื่อมต่อขัดข้อง', 'error');
+        });
+      }
+
+      function handleDisconnectCleanup(notifyPeer) {
+        if (notifyPeer) {
+          sendPayload({ type: 'disconnect' });
+        }
+        if (conn) {
+          try { conn.close(); } catch (e) {}
+          conn = null;
+        }
+        if (role !== 'lobby') {
+          switchView('lobby');
+          showToast('ออกจากโหมดควบคุมแล้ว', 'info');
+          initHostPeer();
+        }
+      }
+
+      // Handle incoming commands on both Controller & Controlled sides
+      function handleIncomingData(data) {
+        if (!data || !data.type) return;
+
+        if (data.type === 'disconnect') {
+          handleDisconnectCleanup(false);
+          return;
+        }
+
+        // Controller receives activity from Phone
+        if (role === 'controller') {
+          if (data.type === 'phone-activity') {
+            appendCtrlLog(`มือถือ: ${data.detail}`);
+          }
+          return;
+        }
+
+        // Phone (Controlled) receives commands from Computer
+        if (role === 'controlled') {
+          if (data.type === 'cursor') {
+            const x = Math.max(0, Math.min(window.innerWidth - 10, data.nx * window.innerWidth));
+            const y = Math.max(0, Math.min(window.innerHeight - 10, data.ny * window.innerHeight));
+            remoteCursor.style.left = `${x}px`;
+            remoteCursor.style.top = `${y}px`;
+            remoteCursor.classList.remove('hidden');
+          } else if (data.type === 'click') {
+            const x = data.nx * window.innerWidth;
+            const y = data.ny * window.innerHeight;
+            remoteCursor.style.left = `${x}px`;
+            remoteCursor.style.top = `${y}px`;
+            remoteCursor.classList.remove('hidden');
+            spawnClickRipple(x, y);
+
+            const target = document.elementFromPoint(x, y);
+            if (target && !target.closest('#phoneExitBtn') && !target.closest('#headerExitBtn')) {
+              const btn = target.closest('button');
+              if (btn) btn.click();
+            }
+          } else if (data.type === 'scroll') {
+            window.scrollBy({ top: data.dy, behavior: 'smooth' });
+          } else if (data.type === 'text') {
+            phoneReceivedText.textContent = data.value;
+            showToast(`ข้อความจากคอม: ${data.value}`, 'info');
+          } else if (data.type === 'ping') {
+            if (navigator.vibrate) navigator.vibrate([120, 60, 120]);
+            showToast('🔔 คอมพิวเตอร์ส่งสัญญาณเรียก!', 'warn');
+          } else if (data.type === 'toggle-theme') {
+            cardAltTheme = !cardAltTheme;
+            const c1 = document.getElementById('card1');
+            const c2 = document.getElementById('card2');
+            c1.classList.toggle('bg-amber-600/30', cardAltTheme);
+            c1.classList.toggle('border-amber-400', cardAltTheme);
+            c2.classList.toggle('bg-fuchsia-600/30', cardAltTheme);
+            c2.classList.toggle('border-fuchsia-400', cardAltTheme);
+          } else if (data.type === 'reset-cards') {
+            const c1 = document.getElementById('card1');
+            const c2 = document.getElementById('card2');
+            c1.style.left = '16px'; c1.style.top = '16px';
+            c2.style.left = ''; c2.style.right = '16px'; c2.style.top = '48px';
+            showToast('รีเซ็ตตำแหน่งการ์ดแล้ว', 'info');
+          } else if (data.type === 'clear-canvas') {
+            clearDrawCanvas();
+          }
+        }
+      }
+
+      function spawnClickRipple(x, y) {
+        const rip = document.createElement('div');
+        rip.className = 'click-ripple';
+        rip.style.left = `${x}px`;
+        rip.style.top = `${y}px`;
+        document.body.appendChild(rip);
+        setTimeout(() => rip.remove(), 600);
+      }
+
+      // Connect from Phone using entered code
+      connectForm.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const code = targetCodeInput.value.trim().replace(/\D/g, '');
+        if (code.length !== 6) {
+          showToast('กรุณากรอกรหัส 6 หลักให้ครบ', 'warn');
+          return;
+        }
+        if (code === myCode) {
+          showToast('ไม่สามารถใส่รหัสของเครื่องตัวเองได้', 'error');
+          return;
+        }
+
+        connectBtn.disabled = true;
+        connectBtn.textContent = 'กำลังเชื่อมต่อ...';
+        setStatus('waiting', 'กำลังเชื่อมต่อคอมพิวเตอร์...');
+
+        // Try BroadcastChannel first if same browser
+        if (typeof BroadcastChannel !== 'undefined') {
+          const tempBc = new BroadcastChannel(PEER_PREFIX + code);
+          let localMatched = false;
+          tempBc.onmessage = (ev) => {
+            if (ev.data && ev.data.type === 'local-ack' && !localMatched) {
+              localMatched = true;
+              bc = tempBc;
+              bc.onmessage = (m) => handleIncomingData(m.data);
+              connectBtn.disabled = false;
+              connectBtn.textContent = 'เชื่อมต่อให้คอมคุมเครื่อง';
+              phoneSessionCode.textContent = code;
+              switchView('controlled');
+              setStatus('connected', 'ถูกคุมจากคอม (ขยับได้ปกติ)');
+              showToast('เชื่อมต่อคอมพิวเตอร์สำเร็จ!', 'success');
+            }
+          };
+          tempBc.postMessage({ from: myCode, type: 'local-join' });
+          setTimeout(() => {
+            if (!localMatched && bc !== tempBc) {
+              try { tempBc.close(); } catch (err) {}
+            }
+          }, 1200);
+        }
+
+        if (!peer) {
+          connectBtn.disabled = false;
+          connectBtn.textContent = 'เชื่อมต่อให้คอมคุมเครื่อง';
+          return;
+        }
+
+        const outConn = peer.connect(PEER_PREFIX + code, { reliable: true });
+        let opened = false;
+
+        outConn.on('open', () => {
+          opened = true;
+          conn = outConn;
+          connectBtn.disabled = false;
+          connectBtn.textContent = 'เชื่อมต่อให้คอมคุมเครื่อง';
+          setupConnectionEvents(conn, 'controlled', code);
+        });
+
+        outConn.on('error', () => {
+          if (!opened) {
+            connectBtn.disabled = false;
+            connectBtn.textContent = 'เชื่อมต่อให้คอมคุมเครื่อง';
+            showToast('ไม่พบรหัสนี้ หรือคอมพิวเตอร์ยังไม่เปิดหน้าเว็บ', 'error');
+            setStatus('ready', 'พร้อมเชื่อมต่อ');
+          }
+        });
+
+        setTimeout(() => {
+          if (!opened && role === 'lobby') {
+            connectBtn.disabled = false;
+            connectBtn.textContent = 'เชื่อมต่อให้คอมคุมเครื่อง';
+            if (!conn) {
+              showToast('เชื่อมต่อไม่สำเร็จ ตรวจสอบรหัส 6 หลักอีกครั้ง', 'warn');
+              setStatus('ready', 'พร้อมเชื่อมต่อ');
+            }
+          }
+        }, 7000);
+      });
+
+      // Copy & Regenerate Code
+      copyCodeBtn.addEventListener('click', () => {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(myCode).then(() => {
+            showToast(`คัดลอกรหัส ${myCode} แล้ว`, 'success');
+          }).catch(() => fallbackCopy(myCode));
+        } else {
+          fallbackCopy(myCode);
+        }
+      });
+
+      function fallbackCopy(text) {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        document.body.appendChild(ta);
+        ta.select();
+        try {
+          document.execCommand('copy');
+          showToast(`คัดลอกรหัส ${text} แล้ว`, 'success');
+        } catch (e) {
+          showToast('ไม่สามารถคัดลอกอัตโนมัติได้', 'warn');
+        }
+        ta.remove();
+      }
+
+      regenCodeBtn.addEventListener('click', () => {
+        initHostPeer();
+        showToast('สุ่มรหัสใหม่แล้ว', 'info');
+      });
+
+      // Exit / Disconnect buttons
+      [headerExitBtn, ctrlExitBtn, phoneExitBtn].forEach((btn) => {
+        btn.addEventListener('click', () => handleDisconnectCleanup(true));
+      });
+
+      // Controller Touchpad Events
+      let lastMoveSent = 0;
+      function emitTouchpadPos(clientX, clientY, isClick = false) {
+        const rect = touchpadArea.getBoundingClientRect();
+        const nx = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+        const ny = Math.max(0, Math.min(1, (clientY - rect.top) / rect.height));
+        touchpadDot.style.left = `${nx * 100}%`;
+        touchpadDot.style.top = `${ny * 100}%`;
+        touchpadDot.classList.remove('hidden');
+        cursorCoordLabel.textContent = `X: ${Math.round(nx * 100)}% Y: ${Math.round(ny * 100)}%`;
+
+        const now = Date.now();
+        if (isClick) {
+          sendPayload({ type: 'click', nx, ny });
+          appendCtrlLog(`คลิกที่ (${Math.round(nx * 100)}%, ${Math.round(ny * 100)}%)`);
+        } else if (now - lastMoveSent > 35) {
+          lastMoveSent = now;
+          sendPayload({ type: 'cursor', nx, ny });
+        }
+      }
+
+      touchpadArea.addEventListener('mousemove', (e) => emitTouchpadPos(e.clientX, e.clientY, false));
+      touchpadArea.addEventListener('click', (e) => emitTouchpadPos(e.clientX, e.clientY, true));
+      touchpadArea.addEventListener('touchmove', (e) => {
+        if (e.touches[0]) {
+          e.preventDefault();
+          emitTouchpadPos(e.touches[0].clientX, e.touches[0].clientY, false);
+        }
+      }, { passive: false });
+      touchpadArea.addEventListener('wheel', (e) => {
+        e.preventDefault();
+        sendPayload({ type: 'scroll', dy: e.deltaY });
+      }, { passive: false });
+
+      // Quick Commands
+      document.getElementById('cmdScrollUp').addEventListener('click', () => sendPayload({ type: 'scroll', dy: -220 }));
+      document.getElementById('cmdScrollDown').addEventListener('click', () => sendPayload({ type: 'scroll', dy: 220 }));
+      document.getElementById('cmdCenterClick').addEventListener('click', () => {
+        sendPayload({ type: 'click', nx: 0.5, ny: 0.5 });
+        appendCtrlLog('แตะกลางจอมือถือ');
+      });
+      document.getElementById('cmdPingPhone').addEventListener('click', () => {
+        sendPayload({ type: 'ping' });
+        appendCtrlLog('ส่งสัญญาณแจ้งเตือน/สั่น');
+      });
+      document.getElementById('cmdToggleTheme').addEventListener('click', () => {
+        sendPayload({ type: 'toggle-theme' });
+        appendCtrlLog('สลับสีการ์ดบนมือถือ');
+      });
+      document.getElementById('cmdResetCards').addEventListener('click', () => {
+        sendPayload({ type: 'reset-cards' });
+        appendCtrlLog('รีเซ็ตตำแหน่งการ์ด');
+      });
+      document.getElementById('cmdClearCanvas').addEventListener('click', () => {
+        sendPayload({ type: 'clear-canvas' });
+        appendCtrlLog('ล้างกระดานวาด');
+      });
+
+      sendTextForm.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const val = remoteTextInput.value.trim();
+        if (!val) return;
+        sendPayload({ type: 'text', value: val });
+        appendCtrlLog(`ส่งข้อความ: "${val}"`);
+        remoteTextInput.value = '';
+      });
+
+      // Phone Interactive Elements (Proves Phone can still move/interact while controlled!)
+      phoneTapTestBtn.addEventListener('click', () => {
+        tapCounter += 1;
+        tapCountEl.textContent = String(tapCounter);
+        sendPayload({ type: 'phone-activity', detail: `กดปุ่มทดสอบ (ครั้งที่ ${tapCounter})` });
+      });
+
+      // Draggable cards on Phone
+      document.querySelectorAll('.draggable-card').forEach((card) => {
+        let dragging = false;
+        let startX = 0, startY = 0, origLeft = 0, origTop = 0;
+
+        card.addEventListener('pointerdown', (e) => {
+          dragging = true;
+          card.setPointerCapture(e.pointerId);
+          const parentRect = card.parentElement.getBoundingClientRect();
+          const rect = card.getBoundingClientRect();
+          origLeft = rect.left - parentRect.left;
+          origTop = rect.top - parentRect.top;
+          card.style.right = 'auto';
+          card.style.left = `${origLeft}px`;
+          card.style.top = `${origTop}px`;
+          startX = e.clientX;
+          startY = e.clientY;
+        });
+
+        card.addEventListener('pointermove', (e) => {
+          if (!dragging) return;
+          const parentRect = card.parentElement.getBoundingClientRect();
+          const maxLeft = parentRect.width - card.offsetWidth;
+          const maxTop = parentRect.height - card.offsetHeight;
+          const newLeft = Math.max(0, Math.min(maxLeft, origLeft + (e.clientX - startX)));
+          const newTop = Math.max(0, Math.min(maxTop, origTop + (e.clientY - startY)));
+          card.style.left = `${newLeft}px`;
+          card.style.top = `${newTop}px`;
+        });
+
+        card.addEventListener('pointerup', () => {
+          if (!dragging) return;
+          dragging = false;
+          sendPayload({ type: 'phone-activity', detail: `ขยับการ์ด ${card.dataset.card} บนมือถือ` });
+        });
+      });
+
+      // Drawing Canvas on Phone
+      const ctx = drawCanvas.getContext('2d');
+      let drawing = false;
+      function resizeCanvas() {
+        const rect = drawCanvas.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) {
+          drawCanvas.width = rect.width;
+          drawCanvas.height = rect.height;
+        }
+      }
+      function clearDrawCanvas() {
+        ctx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
+      }
+      document.getElementById('phoneClearLocalBtn').addEventListener('click', clearDrawCanvas);
+
+      drawCanvas.addEventListener('pointerdown', (e) => {
+        drawing = true;
+        drawCanvas.setPointerCapture(e.pointerId);
+        const rect = drawCanvas.getBoundingClientRect();
+        ctx.beginPath();
+        ctx.moveTo(e.clientX - rect.left, e.clientY - rect.top);
+      });
+      drawCanvas.addEventListener('pointermove', (e) => {
+        if (!drawing) return;
+        const rect = drawCanvas.getBoundingClientRect();
+        ctx.lineWidth = 3;
+        ctx.lineCap = 'round';
+        ctx.strokeStyle = '#34d399';
+        ctx.lineTo(e.clientX - rect.left, e.clientY - rect.top);
+        ctx.stroke();
+      });
+      drawCanvas.addEventListener('pointerup', () => {
+        if (!drawing) return;
+        drawing = false;
+        sendPayload({ type: 'phone-activity', detail: 'วาดบนกระดานมือถือ' });
+      });
+
+      window.addEventListener('resize', () => {
+        if (role === 'controlled') resizeCanvas();
+      });
+
+      // Init on load
+      initHostPeer();
+    })();
+  </script>
+</body>
+</html>
